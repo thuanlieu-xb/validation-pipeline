@@ -1306,128 +1306,130 @@ def save_vb_results(context: dg.AssetExecutionContext, validate_vendor_bills: Li
             # Tích lũy dữ liệu để build summary
             all_df_results.append(df_orig)
 
-    # ── SUMMARY SHEET ─────────────────────────────────────
-    if all_df_results:
-        df_all = pd.concat(all_df_results, ignore_index=True)
+        # ── SUMMARY SHEET (bên trong with ExcelWriter) ────────
+        if all_df_results:
+            from openpyxl.styles import PatternFill as _PF, Font as _Font, Alignment as _Align
 
-        # Tìm cột "Created By" (cột K hoặc tên tương tự)
-        created_by_col = next(
-            (c for c in df_all.columns
-             if any(alias.lower() in c.lower()
-                    for alias in ["created by", "created_by", "người tạo", "nguoi tao", "Responsible"])),
-            None,
-        )
+            df_all = pd.concat(all_df_results, ignore_index=True)
 
-        # ── Bảng 1: Số lỗi theo Rule ─────────────────────
-        rule_summary_rows = []
-        rule_labels = {
-            "R1_Attachment":    "R1 — Attachment Count (Chứng từ đính kèm)",
-            "R2_Serial_HĐ":     "R2 — Ký hiệu hóa đơn (Serial TT78)",
-            "R3_Số_HĐ":         "R3 — Số hóa đơn",
-            "R4_Ngày_HĐ":       "R4 — Ngày hóa đơn",
-            "R5_Diễn_giải_TT":  "R5 — Diễn giải thanh toán",
-            "R6_Diễn_giải_thuế":"R6 — Diễn giải thuế",
-            "R7_Label_dòng":    "R7 — Diễn giải dòng hàng",
-            "R8_Chiều_thuế":    "R8 — Chiều thuế IN/OUT",
-            "R9_ĐT_BĐS×Tax":   "R9 — Đầu tư BĐS × Tax",
-            "R10_Xây_lắp×Tax":  "R10 — Xây lắp × Tax",
-            "R11_KDVT×Journal": "R11 — KDVT × Journal × Tax",
-            "R12_HĐ_ĐT×Journal":"R12 — Hoạt động Đầu tư × Journal",
-        }
-        for col, label in rule_labels.items():
-            if col not in df_all.columns:
-                continue
-            n_loi  = df_all[col].str.contains("❌", na=False).sum()
-            n_pass = df_all[col].str.contains("✅", na=False).sum()
-            n_na   = df_all[col].str.contains("⚪", na=False).sum()
-            rule_summary_rows.append({
-                "Quy tắc":      label,
-                "Số lỗi (❌)":  int(n_loi),
-                "Số PASS (✅)": int(n_pass),
-                "Số N/A (⚪)":  int(n_na),
-                "Tổng HĐ":     int(n_loi + n_pass + n_na),
-            })
-        df_rule = pd.DataFrame(rule_summary_rows)
-
-        # ── Bảng 2: Số lỗi theo Created By ───────────────
-        if created_by_col:
-            # Mỗi HĐ (invoice_number) chỉ đếm 1 lần per người
-            df_person = df_all.copy()
-            df_person["_has_error"] = df_all["VB_Status"].str.upper().isin(["INVALID", "CẦN KIỂM TRA"])
-            person_summary = (
-                df_person.groupby(created_by_col)
-                .agg(
-                    Tổng_HĐ=("VB_Status", "count"),
-                    HĐ_lỗi=("_has_error", "sum"),
-                )
-                .reset_index()
-                .rename(columns={
-                    created_by_col: "Người tạo (Created By)",
-                    "Tổng_HĐ":      "Tổng HĐ",
-                    "HĐ_lỗi":       "HĐ có lỗi",
-                })
+            # Tìm cột "Created By"
+            created_by_col = next(
+                (c for c in df_all.columns
+                 if any(alias.lower() in c.lower()
+                        for alias in ["created by", "created_by", "người tạo", "nguoi tao", "Responsible"])),
+                None,
             )
-            person_summary["HĐ hợp lệ"]   = person_summary["Tổng HĐ"] - person_summary["HĐ có lỗi"]
-            person_summary["% lỗi"]        = (
-                person_summary["HĐ có lỗi"] / person_summary["Tổng HĐ"] * 100
-            ).round(1).astype(str) + "%"
 
-            # Chi tiết lỗi theo rule cho từng người
+            rule_labels = {
+                "R1_Attachment":     "R1 — Attachment Count (Chứng từ đính kèm)",
+                "R2_Serial_HĐ":      "R2 — Ký hiệu hóa đơn (Serial TT78)",
+                "R3_Số_HĐ":          "R3 — Số hóa đơn",
+                "R4_Ngày_HĐ":        "R4 — Ngày hóa đơn",
+                "R5_Diễn_giải_TT":   "R5 — Diễn giải thanh toán",
+                "R6_Diễn_giải_thuế": "R6 — Diễn giải thuế",
+                "R7_Label_dòng":     "R7 — Diễn giải dòng hàng",
+                "R8_Chiều_thuế":     "R8 — Chiều thuế IN/OUT",
+                "R9_ĐT_BĐS×Tax":    "R9 — Đầu tư BĐS × Tax",
+                "R10_Xây_lắp×Tax":   "R10 — Xây lắp × Tax",
+                "R11_KDVT×Journal":  "R11 — KDVT × Journal × Tax",
+                "R12_HĐ_ĐT×Journal": "R12 — Hoạt động Đầu tư × Journal",
+            }
+
+            # ── Bảng 1: Số lỗi theo Rule ─────────────────────
+            rule_rows = []
             for col, label in rule_labels.items():
-                short = label.split("—")[0].strip()
-                if col in df_all.columns:
-                    person_summary[short] = (
-                        df_person.groupby(created_by_col)[col]
-                        .apply(lambda s: int(s.str.contains("❌", na=False).sum()))
-                        .values
-                    )
-        else:
-            person_summary = pd.DataFrame({"Ghi chú": ["Không tìm thấy cột 'Created By' trong file"]})
+                if col not in df_all.columns:
+                    continue
+                n_loi  = int(df_all[col].str.contains("❌", na=False).sum())
+                n_pass = int(df_all[col].str.contains("✅", na=False).sum())
+                n_na   = int(df_all[col].str.contains("⚪", na=False).sum())
+                rule_rows.append({
+                    "Quy tắc":      label,
+                    "Số lỗi (❌)":  n_loi,
+                    "Số PASS (✅)": n_pass,
+                    "Số N/A (⚪)":  n_na,
+                    "Tổng HĐ":     n_loi + n_pass + n_na,
+                })
+            df_rule = pd.DataFrame(rule_rows)
 
-        # Ghi Summary sheet
-        ws_sum = None
-        df_rule.to_excel(writer, index=False, sheet_name="📊 SUMMARY")
-        ws_sum = writer.sheets["📊 SUMMARY"]
+            # ── Bảng 2: Số lỗi theo Created By ───────────────
+            if created_by_col:
+                df_person = df_all.copy()
+                df_person["_has_error"] = df_all["VB_Status"].str.upper().isin(["INVALID", "CẦN KIỂM TRA"])
+                person_summary = (
+                    df_person.groupby(created_by_col)
+                    .agg(Tổng_HĐ=("VB_Status", "count"), HĐ_lỗi=("_has_error", "sum"))
+                    .reset_index()
+                    .rename(columns={
+                        created_by_col: "Người tạo (Created By)",
+                        "Tổng_HĐ": "Tổng HĐ",
+                        "HĐ_lỗi":  "HĐ có lỗi",
+                    })
+                )
+                person_summary["HĐ hợp lệ"] = person_summary["Tổng HĐ"] - person_summary["HĐ có lỗi"]
+                person_summary["% lỗi"] = (
+                    person_summary["HĐ có lỗi"] / person_summary["Tổng HĐ"] * 100
+                ).round(1).astype(str) + "%"
+                for col, label in rule_labels.items():
+                    short = label.split("—")[0].strip()
+                    if col in df_all.columns:
+                        person_summary[short] = (
+                            df_person.groupby(created_by_col)[col]
+                            .apply(lambda s: int(s.str.contains("❌", na=False).sum()))
+                            .values
+                        )
+            else:
+                person_summary = pd.DataFrame({"Ghi chú": ["Không tìm thấy cột 'Created By' trong file"]})
 
-        # Style header rule table
-        from openpyxl.styles import PatternFill, Font, Alignment as _Align
-        header_fill = PatternFill("solid", fgColor="1A73E8")
-        for cell in ws_sum[1]:
-            cell.font      = Font(bold=True, color="FFFFFF")
-            cell.fill      = header_fill
-            cell.alignment = _Align(horizontal="center", wrap_text=True)
+            # ── Ghi sheet SUMMARY ─────────────────────────────
+            df_rule.to_excel(writer, index=False, sheet_name="📊 SUMMARY")
+            ws_sum = writer.sheets["📊 SUMMARY"]
 
-        # Tô đỏ ô có lỗi > 0
-        for row_idx in range(2, ws_sum.max_row + 1):
-            loi_val = ws_sum.cell(row=row_idx, column=2).value
-            if loi_val and int(loi_val) > 0:
-                ws_sum.cell(row=row_idx, column=2).fill = PatternFill("solid", fgColor="FFC7CE")
-                ws_sum.cell(row=row_idx, column=2).font = Font(bold=True, color="C00000")
+            header_fill_blue  = _PF("solid", fgColor="1A73E8")
+            header_fill_green = _PF("solid", fgColor="0F9D58")
 
-        ws_sum.column_dimensions["A"].width = 48
-        for col_letter in ["B", "C", "D", "E"]:
-            ws_sum.column_dimensions[col_letter].width = 16
+            # Style header bảng 1
+            for cell in ws_sum[1]:
+                cell.font      = _Font(bold=True, color="FFFFFF")
+                cell.fill      = header_fill_blue
+                cell.alignment = _Align(horizontal="center", wrap_text=True)
 
-        # Bảng 2: người tạo — bắt đầu sau khi bảng 1 kết thúc
-        start_row = len(df_rule) + 4
-        ws_sum.cell(row=start_row, column=1).value = "THỐNG KÊ THEO NGƯỜI TẠO (Created By)"
-        ws_sum.cell(row=start_row, column=1).font  = Font(bold=True, size=13, color="1A73E8")
+            # Tô đỏ ô lỗi > 0
+            for row_idx in range(2, len(df_rule) + 2):
+                loi_val = ws_sum.cell(row=row_idx, column=2).value
+                if loi_val and int(loi_val) > 0:
+                    ws_sum.cell(row=row_idx, column=2).fill = _PF("solid", fgColor="FFC7CE")
+                    ws_sum.cell(row=row_idx, column=2).font = _Font(bold=True, color="C00000")
 
-        for c_idx, col_name in enumerate(person_summary.columns, 1):
-            cell = ws_sum.cell(row=start_row + 1, column=c_idx, value=col_name)
-            cell.font      = Font(bold=True, color="FFFFFF")
-            cell.fill      = PatternFill("solid", fgColor="0F9D58")
-            cell.alignment = _Align(horizontal="center", wrap_text=True)
+            ws_sum.column_dimensions["A"].width = 50
+            for cl in ["B", "C", "D", "E"]:
+                ws_sum.column_dimensions[cl].width = 16
 
-        for r_idx, data_row in enumerate(person_summary.itertuples(index=False), start=start_row + 2):
-            for c_idx, val in enumerate(data_row, 1):
-                cell = ws_sum.cell(row=r_idx, column=c_idx, value=val)
-                # Tô đỏ nếu cột "HĐ có lỗi" > 0
-                if c_idx == 3 and val and int(val) > 0:
-                    cell.fill = PatternFill("solid", fgColor="FFC7CE")
-                    cell.font = Font(bold=True, color="C00000")
+            # Bảng 2: người tạo
+            start_row = len(df_rule) + 4
+            title_cell = ws_sum.cell(row=start_row, column=1,
+                                     value="THỐNG KÊ THEO NGƯỜI TẠO (Created By)")
+            title_cell.font = _Font(bold=True, size=13, color="1A73E8")
 
-        context.log.info(f"  → Summary: {len(df_rule)} rules | {len(person_summary)} người tạo")
+            for c_idx, col_name in enumerate(person_summary.columns, 1):
+                cell = ws_sum.cell(row=start_row + 1, column=c_idx, value=col_name)
+                cell.font      = _Font(bold=True, color="FFFFFF")
+                cell.fill      = header_fill_green
+                cell.alignment = _Align(horizontal="center", wrap_text=True)
+
+            for r_idx, data_row in enumerate(person_summary.itertuples(index=False),
+                                             start=start_row + 2):
+                for c_idx, val in enumerate(data_row, 1):
+                    cell = ws_sum.cell(row=r_idx, column=c_idx, value=val)
+                    if c_idx == 3 and val and int(val) > 0:
+                        cell.fill = _PF("solid", fgColor="FFC7CE")
+                        cell.font = _Font(bold=True, color="C00000")
+
+            # Đưa sheet SUMMARY lên đầu
+            wb = writer.book
+            wb.move_sheet("📊 SUMMARY", offset=-(len(wb.sheetnames) - 1))
+
+            context.log.info(f"  → Summary: {len(df_rule)} rules | {len(person_summary)} người tạo")
 
     context.log.info(f"Đã lưu: {out_path}")
     return out_path
