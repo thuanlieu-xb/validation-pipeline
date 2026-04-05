@@ -1,0 +1,9 @@
+dagster
+dagster-webserver
+pandas
+openpyxl
+python-docx
+google-genai
+chromadb
+python-dotenv
+groq
